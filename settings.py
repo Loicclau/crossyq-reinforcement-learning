@@ -4,7 +4,7 @@ import math
 from pathlib import Path
 
 # --- écran et projection isométrique ---
-W, H = 660, 760
+W, H = 560, 760
 S = 44.0                    # taille d'une unité monde (px)
 
 # --- caméra ---
@@ -53,10 +53,13 @@ WINDOW = (52, 72, 104)
 # --- personnages (skins) ---
 SKINS = [
     dict(name="Grenouille", price=0, body=(242, 138, 50), foot=(212, 104, 30), belly=(255, 228, 164), acc=None),
-    dict(name="Lapin", price=25, body=(236, 236, 244), foot=(196, 196, 210), belly=(255, 190, 208), acc="ears"),
-    dict(name="Canard", price=50, body=(252, 218, 70), foot=(240, 150, 40), belly=(255, 244, 170), acc="beak"),
-    dict(name="Robot", price=80, body=(150, 170, 196), foot=(104, 120, 146), belly=(210, 226, 244), acc="ant"),
+    dict(name="Lapin", price=10, body=(236, 236, 244), foot=(196, 196, 210), belly=(255, 190, 208), acc="ears"),
+    dict(name="Canard", price=20, body=(252, 218, 70), foot=(240, 150, 40), belly=(255, 244, 170), acc="beak"),
+    dict(name="Robot", price=30, body=(150, 170, 196), foot=(104, 120, 146), belly=(210, 226, 244), acc="ant"),
+    dict(name="Poulet", price=40, style="chicken", body=(250, 250, 252), foot=(248, 200, 40), belly=(250, 250, 252),
+         acc=None, wing=(224, 228, 238), comb=(222, 48, 48), beak=(246, 160, 42), eye=(22, 22, 28)),
 ]
+CHICKEN_SCALE = 0.76          # taille du poulet (1.0 = taille précédente ; plus petit = plus compact)
 
 # --- bordures latérales (zone hors des colonnes jouables) ---
 SIDE_DARKEN = {"grass": 0.86, "road": 0.78, "rail": 0.84, "river": 0.88, "pads": 0.88}
@@ -84,3 +87,25 @@ LOG_SNAP_SPEED = 18.0            # vitesse du recalage (plus grand = plus rapide
 # --- bûches d'une seule case : rares au début, de plus en plus fréquentes quand le jeu devient dur ---
 LOG1_CHANCE_START = 0.03         # probabilité par bûche au début de la partie
 LOG1_CHANCE_END = 0.28           # ... à difficulté maximale (rangée ~250)
+
+# --- petites voitures (1 case environ) : voies dédiées, rares au début, un peu plus rapides ---
+SMALL_LANE_START = 0.04          # part des routes qui sont des voies de petites voitures (début)
+SMALL_LANE_END = 0.22            # ... à difficulté maximale
+SMALL_SPEED_MUL = 1.12           # elles roulent environ 25 % plus vite
+SMALL_SPEED_MAX = 6.8            # plafond de vitesse (cases/s)
+
+# --- bûches : la bûche s'enfonce un peu quand le joueur atterrit dessus, puis remonte ---
+LOG_DIP_DEPTH = 5.0              # profondeur de l'enfoncement (px)
+LOG_DIP_TIME = 0.5               # durée totale (s)
+
+# --- génération du monde : sections, zones de repos, arbres, vitesse des bûches ---
+ROAD_RUN_MIN = 4                 # une section de routes compte au moins 4 rangées
+ROAD_RUN_MAX_HARD = 8            # ... et jusqu'à 8 à difficulté maximale (4 au début)
+REST_START = 75                  # première rangée où une zone de repos (herbe) peut apparaître
+REST_PEAK = 100                  # rangée où elle est la plus probable
+REST_GAP = 55                    # écart minimal (rangées) entre deux zones de repos
+REST_LEN = (4, 5)                # longueur d'une zone de repos
+TREE_CENTER_FACTOR = 0.75        # arbres sur les colonnes centrales (-1..1) : multipliés par ce facteur
+LOG_SPEED = (0.8, 1.85)          # vitesse de base des bûches (avant : 0.7 - 1.6), puis x difficulté
+CUT_LOG_START = 0.06             # part des rivières en "bûches coupées" (petits morceaux) au début
+CUT_LOG_END = 0.40               # ... à difficulté maximale

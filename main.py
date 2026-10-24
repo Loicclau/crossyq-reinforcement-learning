@@ -18,7 +18,7 @@ from game import Game
 
 def main():
     pygame.init()
-    pygame.display.set_caption("Froggy Road")
+    pygame.display.set_caption("Crossy Road")
     try:
         screen = pygame.display.set_mode((W, H), pygame.SCALED | pygame.RESIZABLE)
     except (pygame.error, AttributeError):
