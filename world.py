@@ -2,7 +2,10 @@
 import random
 
 from settings import (COL_MAX, WRAP, ZT, LOG_H, CAR_COLORS, TRAILERS,
-                      GRASS_C, ROAD_C, RAIL_C, LOG_C, PAD_C, LOG1_CHANCE_START, LOG1_CHANCE_END)
+                      GRASS_C, ROAD_C, RAIL_C, LOG_C, PAD_C, LOG1_CHANCE_START, LOG1_CHANCE_END,
+                      SMALL_LANE_START, SMALL_LANE_END, SMALL_SPEED_MUL, SMALL_SPEED_MAX,
+                      ROAD_RUN_MIN, ROAD_RUN_MAX_HARD, REST_START, REST_PEAK, REST_GAP, REST_LEN,
+                      TREE_CENTER_FACTOR, LOG_SPEED, CUT_LOG_START, CUT_LOG_END)
 from utils import difficulty
 
 
@@ -48,6 +51,7 @@ class Row:
         self.front = 0.0
         self.cops = []             # voitures de police en cours de passage
         self.cop_state = None      # None | clearing | active | restoring
+        self.dips = {}             # bûche -> instant où le joueur a atterri dessus
         self.idle = (2.0, 5.0)     # pause entre deux trains (s)
         self.warn = 1.4            # durée de l'avertissement (s)
 
@@ -77,91 +81,174 @@ class Row:
 
 
 class World:
-    EASY = {"grass": 3.0, "road": 4.0, "river": 2.2, "rail": 1.0, "pads": 1.0}
-    HARD = {"grass": 1.1, "road": 4.6, "river": 3.4, "rail": 1.9, "pads": 1.4}
+    # poids des types de rangée pour les sections "chaos" (mélange libre, rangée par rangée)
+    EASY = {"grass": 3.0, "road": 4.0, "river": 1.0, "rail": 1.0, "pads": 0.5}
+    HARD = {"grass": 1.1, "road": 4.6, "river": 3.4, "rail": 1.9, "pads": 1.6}
     LIMITS = {"grass": 2, "road": 4, "river": 3, "rail": 1, "pads": 3}
+    # poids des SECTIONS (blocs de plusieurs rangées d'un même thème) : début -> difficulté maximale
+    #   meadow = 1-2 rangées d'herbe | road = 4 à 8 routes | river = groupe de bûches | lilies = groupe de nénuphars
+    #   mixed = eau mélangée | rail = voie ferrée | crossing = rail + 2-3 routes + rail | chaos = mélange libre
+    SECTION_EASY = dict(meadow=4.0, road=1.5, chaos=3.2, river=0.5, lilies=0.35, rail=0.7, crossing=0.0, mixed=0.0)
+    SECTION_HARD = dict(meadow=1.2, road=3.6, chaos=2.0, river=3.4, lilies=2.1, rail=1.5, crossing=1.3, mixed=2.1)
 
     def __init__(self):
         self.rng = random.Random()
         self.rows = {}
         self.last, self.run = "grass", 0
+        self.plan = ["grass"]                 # rangées déjà planifiées ("rest" = herbe de repos) ; départ en douceur
+        self.last_section, self.last_rest = "start", 0
         self.reach = set(range(-COL_MAX, COL_MAX + 1))   # colonnes atteignables sur la dernière rangée
         for y in range(-16, 2):
             self.rows[y] = self.make(y, "grass", start=True)
         self.top = 2
 
-    def pick(self):
-        """Choisit le type de la prochaine rangée (pondéré par la difficulté)."""
+    # ---- planification par sections ----
+    def pick(self, last, run):
+        """Type d'une rangée "chaos" (pondéré par la difficulté, avec limite de répétition)."""
         r = self.rng
         d = difficulty(self.top)
         kinds = list(self.EASY)
         weights = [self.EASY[k] + (self.HARD[k] - self.EASY[k]) * d for k in kinds]
         while True:
             k = r.choices(kinds, weights)[0]
-            if k == self.last and self.run >= self.LIMITS[k]:
+            if k == last and run >= self.LIMITS[k]:
                 continue
             return k
 
-    def make(self, y, kind, start=False):
+    def plan_section(self):
+        """Prépare le prochain bloc de rangées (self.plan)."""
+        r, y = self.rng, self.top
+        d = difficulty(y)
+        # zone de repos : 4-5 rangées d'herbe, de temps en temps (surtout autour de la rangée 100)
+        if y >= REST_START and y - self.last_rest >= REST_GAP and self.last_section not in ("meadow", "rest"):
+            t = min(1.0, (y - REST_START) / max(1, REST_PEAK - REST_START))
+            p = 0.12 + 0.33 * t if y <= REST_PEAK + 60 else 0.16
+            if r.random() < p:
+                self.last_section, self.last_rest = "rest", y
+                self.plan = ["rest"] * r.randint(*REST_LEN)
+                return
+        names = list(self.SECTION_EASY)
+        weights = [self.SECTION_EASY[n] + (self.SECTION_HARD[n] - self.SECTION_EASY[n]) * d for n in names]
+        name = self.last_section
+        while name == self.last_section:              # jamais deux fois la même section d'affilée
+            name = r.choices(names, weights)[0]
+        if name == "meadow":
+            kinds = ["grass"] * r.randint(1, 2)
+        elif name == "road":                           # 4 routes au début, jusqu'à 8 plus loin
+            hi = ROAD_RUN_MIN + int(round((ROAD_RUN_MAX_HARD - ROAD_RUN_MIN) * d))
+            kinds = ["road"] * r.randint(ROAD_RUN_MIN, max(ROAD_RUN_MIN, hi))
+        elif name == "river":                          # groupe de bûches : court au début, long ensuite
+            lo = 1 + int(d * 2.5)
+            kinds = ["river"] * r.randint(lo, max(lo, 2 + int(d * 4)))
+        elif name == "lilies":                         # groupe de nénuphars
+            lo = 1 + int(d * 2)
+            kinds = ["pads"] * r.randint(lo, max(lo, 2 + int(d * 3)))
+        elif name == "mixed":                          # eau mélangée : bûches et nénuphars
+            kinds = []
+            for _ in range(r.randint(2, 3 + int(3 * d))):
+                k = r.choice(("river", "pads"))
+                if len(kinds) >= 2 and kinds[-1] == kinds[-2] == k:
+                    k = "pads" if k == "river" else "river"
+                kinds.append(k)
+        elif name == "rail":
+            kinds = ["rail"]
+        elif name == "crossing":                       # voie ferrée, 2-3 routes, voie ferrée
+            kinds = ["rail"] + ["road"] * r.randint(2, 3) + ["rail"]
+        else:                                          # chaos : 3 à 6 rangées tirées librement
+            kinds, last, run = [], self.last, self.run
+            for _ in range(r.randint(3, 6)):
+                k = self.pick(last, run)
+                run = run + 1 if k == last else 1
+                last = k
+                kinds.append(k)
+        water = ("river", "pads")
+        if (kinds[0] == self.last and self.last != "grass") or (kinds[0] in water and self.last in water):
+            kinds.insert(0, "grass")                          # une berge sépare deux blocs identiques / deux groupes d'eau
+        self.last_section, self.plan = name, kinds
+
+    def make(self, y, kind, start=False, rest=False):
         r = self.rng
-        row = Row(y, kind, r.randint(0, 999), r.choice((-1, 1)))
         d = difficulty(y)
         m = 1 + 0.9 * d                      # multiplicateur de vitesse
+        prev = self.rows.get(y - 1)
+        direction = r.choice((-1, 1))
+        if prev is not None and prev.kind == kind and kind in ("road", "river") and r.random() < 0.65:
+            direction = -prev.dir            # voies voisines : plutôt en sens contraire
+        row = Row(y, kind, r.randint(0, 999), direction)
         if kind == "grass":
             for c in range(-COL_MAX, COL_MAX + 1):
                 if c == 0 and y <= 1:
                     continue
-                p = (0.1 if y < -1 else 0.0) if start else 0.2 + 0.12 * d
+                if start:
+                    p = 0.1 if y < -1 else 0.0
+                else:
+                    p = 0.19 + 0.11 * d                                   # un peu moins d'arbres qu'avant (0.20 + 0.12 d)
+                    if abs(c) <= 1:
+                        p *= TREE_CENTER_FACTOR                           # couloir central plus dégagé
+                    elif abs(c) == 2:
+                        p *= 0.9
+                    if rest:
+                        p *= 0.35                                         # zone de repos : très peu d'arbres
                 if r.random() < p:
                     row.trees[c] = (r.randint(1, 3), r.randint(0, 2))
-            if not start and r.random() < 0.12 - 0.06 * d:
-                free = [c for c in range(-COL_MAX, COL_MAX + 1) if c not in row.trees]
-                if free:
-                    row.coins.add(r.choice(free))
+            if not start:
+                for _ in range(2 if rest else 1):
+                    if r.random() < (0.30 if rest else 0.12 - 0.06 * d):
+                        free = [c for c in range(-COL_MAX, COL_MAX + 1) if c not in row.trees and c not in row.coins]
+                        if free:
+                            row.coins.add(r.choice(free))
         elif kind == "road":
+            small = r.random() < SMALL_LANE_START + (SMALL_LANE_END - SMALL_LANE_START) * d   # voie de petites voitures
             row.speed = r.uniform(1.6, 3.8) * m
+            if small:
+                row.speed = min(row.speed * SMALL_SPEED_MUL, SMALL_SPEED_MAX)
             n = min(5, 2 + int(round(2 * d)) + r.choice((0, 1)))     # 2-3 au début, 4-5 plus loin
             jit = 1.2 - 0.5 * d
             sp, o = WRAP / n, r.uniform(0, WRAP)
             for i in range(n):
-                truck = r.random() < min(0.15 + 0.30 * d, 0.45 if n < 5 else 0.3)
+                truck = (not small) and r.random() < min(0.15 + 0.30 * d, 0.45 if n < 5 else 0.3)
                 row.items.append(dict(off=(o + i * sp + r.uniform(-jit, jit)) % WRAP,
-                                      len=3.2 if truck else 1.5, truck=truck,
+                                      len=3.2 if truck else (1.05 if small else 1.5),
+                                      truck=truck, small=small,
                                       color=r.choice(CAR_COLORS), color2=r.choice(TRAILERS)))
         elif kind == "river":
-            row.speed = r.uniform(0.7, 1.6) * m
-            prev = self.rows.get(y - 1)
+            row.speed = r.uniform(*LOG_SPEED) * m                    # un peu plus rapide qu'avant
             if prev is not None and prev.kind == "river" and prev.dir == row.dir:
                 # deux rivières voisines dans le même sens : vitesses nettement différentes
-                gap, lo_s, hi_s = 0.55 * m, 0.6 * m, 1.8 * m
+                gap, lo_s, hi_s = 0.55 * m, LOG_SPEED[0] * 0.85 * m, LOG_SPEED[1] * 1.12 * m
                 options = []
                 if prev.speed - gap >= lo_s:
                     options.append(r.uniform(lo_s, prev.speed - gap))
                 if prev.speed + gap <= hi_s:
                     options.append(r.uniform(prev.speed + gap, hi_s))
                 row.speed = r.choice(options) if options else prev.speed + gap
+            cut = r.random() < CUT_LOG_START + (CUT_LOG_END - CUT_LOG_START) * d    # rivière de "bûches coupées"
             pos, centers = r.uniform(0, 2), []
             while pos < WRAP - 3:
                 p1 = LOG1_CHANCE_START + (LOG1_CHANCE_END - LOG1_CHANCE_START) * d      # bûche d'1 case
-                if r.random() < p1:
-                    ln = 1
+                if cut:
+                    ln = r.choice((1, 1, 2, 2))
+                    gap = r.uniform(0.8 + 0.5 * d, 1.6 + 0.7 * d)
+                elif r.random() < p1:
+                    ln, gap = 1, r.uniform(1.0 + 0.7 * d, 2.2 + 0.9 * d)
                 else:
                     ln = r.choice((2, 2, 3, 3, 4) if r.random() > d else (2, 2, 2, 3))
+                    gap = r.uniform(1.0 + 0.7 * d, 2.2 + 0.9 * d)
                 centers.append([pos + ln / 2, ln])
-                pos += ln + r.uniform(1.0 + 0.7 * d, 2.2 + 0.9 * d)
+                pos += ln + gap
             scale = WRAP / pos
             row.logs = [(c * scale, ln) for c, ln in centers]
         elif kind == "pads":
-            prev = self.rows.get(y - 1)
             if prev is not None and prev.kind == "pads":
-                cols = set(prev.pads)
-                for c in range(-COL_MAX, COL_MAX + 1):
-                    if r.random() < 0.25:
-                        cols.add(c)
+                # groupe de nénuphars : on garde une partie de la rangée précédente et on en ajoute de nouveaux
+                cols = {c for c in prev.pads if r.random() < 0.72}
+                if not cols:
+                    cols = {r.choice(sorted(prev.pads))}
+                cols |= {c for c in range(-COL_MAX, COL_MAX + 1) if r.random() < 0.30 - 0.10 * d}
             else:
-                cols = {c for c in range(-COL_MAX, COL_MAX + 1) if r.random() < 0.55}
-                while len(cols) < 3:
-                    cols.add(r.randint(-COL_MAX, COL_MAX))
+                cols = {c for c in range(-COL_MAX, COL_MAX + 1) if r.random() < 0.55 - 0.15 * d}
+            while len(cols) < 3:
+                cols.add(r.randint(-COL_MAX, COL_MAX))
             row.pads = cols
         elif kind == "rail":
             row.timer = r.uniform(0.5, 3.5)
@@ -170,12 +257,16 @@ class World:
         return row
 
     def generate(self, y_max):
-        """Génère les rangées jusqu'à y_max."""
+        """Génère les rangées jusqu'à y_max (en suivant le plan de sections)."""
         while self.top <= y_max:
-            k = self.pick()
+            if not self.plan:
+                self.plan_section()
+            tag = self.plan.pop(0)
+            rest = tag == "rest"
+            k = "grass" if rest else tag
             self.run = self.run + 1 if k == self.last else 1
             self.last = k
-            row = self.make(self.top, k)
+            row = self.make(self.top, k, rest=rest)
             self.ensure_passable(row)
             self.rows[self.top] = row
             self.top += 1

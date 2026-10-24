@@ -7,7 +7,8 @@ import sys
 
 import pygame
 
-from settings import (LEAD, HOP_T, COL_MAX, WRAP, LOG_SNAP_SPEED, SAVE_FILE, ZT, SKINS, LEVEL_STEP,
+from settings import (LEAD, HOP_T, COL_MAX, WRAP, LOG_SNAP_SPEED, LOG_DIP_DEPTH, LOG_DIP_TIME,
+                      SAVE_FILE, ZT, SKINS, LEVEL_STEP,
                       CAM_SMOOTH_Y, CAM_SMOOTH_X, COP_INTERVAL_START, COP_INTERVAL_END, COP_MIN_SCORE, COP_SPEED)
 from utils import shade, pd, creep_speed, difficulty
 from world import World, ground_z, ground_color
@@ -23,7 +24,7 @@ class Game(RenderMixin):
         self.f_mid = pygame.font.Font(None, 52)
         self.f_small = pygame.font.Font(None, 30)
         self.best, self.coins = 0, 0
-        self.owned, self.skin_i = {SKINS[0]["name"]}, 0
+        self.owned, self.skin_i = {s["name"] for s in SKINS if s["price"] == 0}, 0     # les persos gratuits sont débloqués
         self.snd = make_sounds()
         self.load()
         self.t = 0.0
@@ -36,14 +37,17 @@ class Game(RenderMixin):
             d = json.loads(SAVE_FILE.read_text())
             self.best, self.coins = int(d.get("best", 0)), int(d.get("coins", 0))
             self.owned |= set(d.get("owned", []))
-            self.skin_i = int(d.get("skin", 0)) % len(SKINS)
+            names = [s["name"] for s in SKINS]
+            # on retrouve le perso par son NOM (l'ordre de la liste peut changer), sinon par l'ancien indice
+            self.skin_i = names.index(d["skin_name"]) if d.get("skin_name") in names else int(d.get("skin", 0)) % len(SKINS)
         except Exception:
             pass
 
     def save(self):
         try:
             SAVE_FILE.write_text(json.dumps({"best": self.best, "coins": self.coins,
-                                              "owned": sorted(self.owned), "skin": self.skin_i}))
+                                              "owned": sorted(self.owned), "skin": self.skin_i,
+                                              "skin_name": SKINS[self.skin_i]["name"]}))
         except Exception:
             pass
 
@@ -217,8 +221,21 @@ class Game(RenderMixin):
     def log_center(self, row, idx, k):
         return row.shift + row.logs[idx][0] + k * WRAP
 
+    def log_dip_k(self, row, idx):
+        """Progression 0..1 de l'enfoncement de la bûche, ou None s'il n'y en a pas."""
+        t0 = row.dips.get(idx)
+        if t0 is None:
+            return None
+        k = (self.t - t0) / LOG_DIP_TIME
+        return k if 0 <= k < 1 else None
+
     def log_bob(self, row, idx):
-        return math.sin(self.t * 2 + row.logs[idx][0]) * 1.2
+        """Hauteur de la bûche : balancement + enfoncement à l'atterrissage (descend vite, remonte doucement)."""
+        z = math.sin(self.t * 2 + row.logs[idx][0]) * 1.2
+        k = self.log_dip_k(row, idx)
+        if k is not None:
+            z -= LOG_DIP_DEPTH * math.sin(math.pi * k ** 0.6)
+        return z
 
     def find_log(self, row, x):
         """Bûche située sous la position x : (indice, copie k, écart d au centre) ou None."""
@@ -269,6 +286,7 @@ class Game(RenderMixin):
                 self.die("drown")
             else:
                 self.attach_log(row, hit)
+                row.dips[hit[0]] = self.t              # la bûche s'enfonce sous le poids du joueur
         elif row.kind == "grass" and round(p.x) in row.coins:
             row.coins.discard(round(p.x))
             self.coins += 1
@@ -328,7 +346,9 @@ class Game(RenderMixin):
         row = self.cop_row
         if row is None:
             return
-        if self.world.rows.get(row.y) is not row or row.y < self.cam_y - 1:     # rangée disparue
+        # l'événement ne s'arrête que quand la voie est vraiment hors de l'écran (le bas de l'écran
+        # montre jusqu'à ~9,5 rangées sous la caméra) ou supprimée du monde
+        if self.world.rows.get(row.y) is not row or row.y < self.cam_y - 12:
             self.end_cop(row)
             return
         lo, hi = self.lane_window(row)
@@ -348,6 +368,8 @@ class Game(RenderMixin):
                     snd.play(loops=-1)
                 self.siren_on = True
         elif row.cop_state == "active":
+            exit_x = hi if row.dir > 0 else lo                  # la police est retirée une fois sortie de l'écran
+            row.cops = [c for c in row.cops if (c["x"] - exit_x) * row.dir <= 3.0]
             if row.cops:
                 cop = row.cops[0]
                 dist = cop["x"] - self.p.x

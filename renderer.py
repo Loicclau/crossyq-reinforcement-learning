@@ -10,7 +10,7 @@ import pygame
 
 from settings import (W, H, AX, AY, BX, BY, OX, OY, Z_BOT, COL_MAX, WRAP, ZT, LOG_H, LOG_C,
                       GRASS_C, ROAD_C, WATER_C, RAIL_C, PAD_C, FOLIAGE, WINDOW, SKINS,
-                      SIDE_DARKEN, FOAM_COLOR, TRUNK_H, RAIL_SIGNAL_X)
+                      SIDE_DARKEN, FOAM_COLOR, TRUNK_H, RAIL_SIGNAL_X, CHICKEN_SCALE)
 from utils import shade
 from world import ground_color
 from sprites import draw_coin, draw_eagle
@@ -111,6 +111,8 @@ class RenderMixin:
     def draw_vehicle(self, x, y, d, v, zt):
         if v["truck"]:
             self.draw_truck(x, y, d, v, zt)
+        elif v.get("small"):
+            self.draw_mini(x, y, d, v, zt)
         else:
             self.draw_car(x, y, d, v, zt)
 
@@ -207,6 +209,71 @@ class RenderMixin:
         box(.30, .40, -.44, -.35, 14, 17, mirror)                  # rétroviseur côté caméra
         side(.31, .39, 14.6, 16.4, (170, 196, 222), -.444)
 
+    def draw_mini(self, x, y, d, v, zt):
+        """Petite voiture (~1 case) : citadine courte, cabine haute, grands phares."""
+        X, box, side, end = self._tools(x, y, d, zt)
+        col = v["color"]
+        seed = int(abs(v.get("off", 0.0)) * 10)
+        roof = shade(col, .70) if seed % 3 == 0 else col
+        DARK, CHROME, LAMP, RED = (40, 42, 50), (200, 204, 214), (255, 238, 150), (230, 50, 50)
+        mirror, bump = shade(col, .85), (172, 176, 188)
+
+        box(.18, .26, .31, .40, 13, 15.5, mirror)                    # rétroviseur côté lointain
+        box(-.45, .45, -.28, .28, 1, 3.5, DARK)                      # dessous
+        if d > 0:                                                    # pare-chocs côté lointain
+            box(-.55, -.50, -.30, .30, 3, 5.6, bump)
+        else:
+            box(.50, .55, -.30, .30, 3, 5.6, bump)
+        box(-.5, .5, -.34, .34, 3, 12, col)                          # carrosserie
+        side(-.46, .46, 3, 4.2, shade(col, .62), -.344)              # bas de caisse
+        side(-.5, .5, 10.6, 11.2, shade(col, 1.18), -.344)           # ligne de ceinture
+        for u in (.3, -.3):                                          # passages de roues
+            side(u - .19, u + .19, 3, 7.2, shade(col, .45), -.346)
+        side(.04, .08, 4.2, 10.4, shade(col, .65), -.348)            # joint de porte
+        side(-.12, -.04, 9, 9.7, CHROME, -.350)                      # poignée
+        box(-.36, .22, -.30, .30, 12, 19, WINDOW)                    # habitacle
+        side(-.10, -.05, 12, 19, roof, -.304)                        # montant
+        side(-.36, .22, 18.2, 19, roof, -.304)
+        box(-.39, .25, -.32, .32, 19, 22, roof)                      # toit
+        xg = max(X(-.36), X(.22)) + .004                             # vitre avant / arrière visible
+        end(xg, -.22, -.10, 13.5, 17.5, (104, 138, 180))
+        end(xg, .02, .09, 13.5, 17.5, (104, 138, 180))
+        xe = x + .5 + .004                                           # face visible : avant ou arrière
+        if d > 0:
+            end(xe, -.29, -.15, 6.2, 10, LAMP)
+            end(xe, .15, .29, 6.2, 10, LAMP)
+            end(xe, -.09, .09, 5, 8.2, DARK)
+            end(xe + .003, -.09, .09, 6.5, 7.1, CHROME)
+        else:
+            end(xe, -.29, -.16, 6.2, 10, RED)
+            end(xe, .16, .29, 6.2, 10, RED)
+            end(xe, -.08, .08, 4.8, 7.2, (240, 240, 230))
+        if d > 0:                                                    # pare-chocs côté caméra
+            box(.50, .55, -.30, .30, 3, 5.6, bump)
+        else:
+            box(-.55, -.50, -.30, .30, 3, 5.6, bump)
+        if seed % 4 == 0:                                            # antenne
+            box(-.30, -.26, .24, .28, 22, 29, DARK)
+        for u in (.3, -.3):                                          # roues (un peu plus petites)
+            self.draw_wheel(X(u), y, zt, hl=.14, outer=-.40, near=-.27, h=6)
+        box(.18, .26, -.40, -.32, 13, 15.5, mirror)                  # rétroviseur côté caméra
+        side(.19, .25, 13.6, 15, (170, 196, 222), -.404)
+
+    def draw_pad(self, c, y, zt, orient):
+        """Nénuphar : plateforme carrée avec un coin manquant ; l'encoche change de sens (4 orientations)."""
+        sx, sy = ((1, 1), (-1, 1), (-1, -1), (1, -1))[orient]
+        h, q = .4, .3                                   # demi-côté, taille de l'encoche
+        if sy > 0:
+            rects = [(c - h, c + h, y - h, y + h - q)]
+            y0, y1 = y + h - q, y + h
+        else:
+            rects = [(c - h, c + h, y - h + q, y + h)]
+            y0, y1 = y - h, y - h + q
+        rects.append((c - h, c + h - q, y0, y1) if sx > 0 else (c - h + q, c + h, y0, y1))
+        col = shade(PAD_C, .94 + .04 * orient)
+        for xa, xb, ya, yb in sorted(rects, key=lambda r: -r[2]):     # le plus lointain d'abord
+            self.cube(xa, xb, ya, yb, zt - 1, zt + 2, col)
+
     def draw_truck(self, x, y, d, v, zt):
         """Camion : cabine + remorque. Les pièces sont dessinées de la plus lointaine
         à la plus proche (la caméra voit les faces y- et x+), selon le sens de marche d.
@@ -279,6 +346,9 @@ class RenderMixin:
 
     def draw_frog(self, x, y, z0, sq=1.0, wide=1.0, face=(0, 1)):
         """Héros : petite grenouille cubique (personnage original)."""
+        if self.skin_now().get("style") == "chicken":
+            self.draw_chicken(x, y, z0, sq, wide, face)
+            return
         cube = self.cube
         fx, fy = face
         px, py = abs(fy), abs(fx)
@@ -320,6 +390,61 @@ class RenderMixin:
             cube(x - .04, x + .04, y - .04, y + .04, ztop, ztop + 11 * sq, (200, 60, 60))
             cube(x - .09, x + .09, y - .09, y + .09, ztop + 11 * sq, ztop + 16 * sq, (255, 90, 90))
 
+    def draw_chicken(self, x, y, z0, sq=1.0, wide=1.0, face=(0, 1)):
+        """Poulet blanc voxel : corps et tête cubiques, crête rouge, bec orange, yeux noirs,
+        petites ailes, pattes jaunes. sq / wide = écrasement du saut (comme la grenouille).
+        Les pièces sont dessinées de la plus lointaine à la plus proche : la caméra voit les
+        faces y- et x+, donc le côté 'proche' et l'avant du poulet dépendent de son orientation."""
+        sk, cube = self.skin_now(), self.cube
+        fx, fy = face
+        px, py = abs(fy), abs(fx)                      # axe latéral du poulet
+        near = 1 if px == 1 else -1                    # côté latéral tourné vers la caméra
+        far = -near
+        fwd_near = (fx - fy) > 0                       # l'avant du poulet regarde vers la caméra
+        white, wing, foot = sk["body"], sk["wing"], sk["foot"]
+        comb, beak, eye = sk["comb"], sk["beak"], sk["eye"]
+
+        K = CHICKEN_SCALE                               # taille globale du poulet (réglable dans settings.py)
+
+        def box(a, s, hf, hl, za, zb, col):            # a = avant/arrière, s = côté, hf/hl = demi-tailles
+            a, s, hf, hl, za, zb = a * K, s * K, hf * K, hl * K, za * K, zb * K
+            cx, cy = x + fx * a + px * s, y + fy * a + py * s
+            hx, hy = (hf, hl) if fx else (hl, hf)
+            cube(cx - hx, cx + hx, cy - hy, cy + hy, z0 + za, z0 + zb, col)
+
+        W = 0.29 * wide                                 # demi-largeur du corps (case = 1)
+        lh = max(1.0, 8.5 * sq)                         # hauteur des pattes
+        bh, hh = max(1.5, 15 * sq), max(1.5, 11 * sq)   # hauteur du corps / de la tête
+        zb, zh = lh + bh, lh + bh + hh                  # sommet du corps / de la tête
+        for sgn in (far, near):                         # pattes jaunes + petits pieds
+            box(0, sgn * .13 * wide, .06, .06, 0, lh, foot)
+            box(.09, sgn * .13 * wide, .12, .075, 0, max(1.0, 2.2 * sq), foot)
+        box(-.02, far * (W + .035), .17, .035, lh + bh * .18, lh + bh * .78, wing)       # aile lointaine
+        box(0, 0, W, W, lh, zb, white)                                                    # corps
+        box(-.02, near * (W + .035), .17, .035, lh + bh * .18, lh + bh * .78, wing)      # aile proche
+        ez0 = zb + hh * .45
+        ez1 = ez0 + max(1.0, 3.5 * sq)
+        beak_box = lambda: box(.29 + .075, 0, .075, .07 * wide, zb + hh * .28, zb + hh * .62, beak)
+        if not fwd_near:
+            beak_box()                                  # bec derrière la tête : dessiné avant elle
+        box(.14, far * (.24 * wide + .02), .035, .025, ez0, ez1, eye)                     # œil lointain
+        box(.05, 0, .24 * wide, .24 * wide, zb, zh, white)                                # tête
+        box(.14, near * (.24 * wide + .02), .035, .025, ez0, ez1, eye)                    # œil proche
+        if fwd_near:
+            beak_box()                                  # bec devant la tête : dessiné après elle
+        bumps = ((-.09, 5), (.02, 7), (.13, 4))         # crête rouge : trois créneaux
+        for a, ch in (bumps if fwd_near else bumps[::-1]):
+            box(a, 0, .05, .04 * wide, zh, zh + max(1.0, ch * sq), comb)
+
+    def draw_drown_rings(self, zw):
+        """Ronds dans l'eau quand le joueur se noie : au niveau de l'eau, donc SOUS les bûches et nénuphars."""
+        p = self.p
+        cx, cy = self.P(p.x, p.y, zw)
+        for i in range(3):
+            r = (self.dead_t * 1.1 + i * 0.33) % 1.0
+            pygame.draw.ellipse(self.screen, (214, 238, 252),
+                                (cx - r * 56, cy - r * 28, r * 112, r * 56), 2)
+
     def draw_player(self):
         p = self.p
         row = self.world.rows.get(round(p.y))
@@ -337,14 +462,11 @@ class RenderMixin:
                 if sink < 1:
                     self.draw_frog(p.x, p.y, gz - sink * 30, 1.0, 1.0, p.face)
                 self.screen.set_clip(None)
-                for i in range(3):
-                    r = (self.dead_t * 1.1 + i * 0.33) % 1.0
-                    cx, cy = self.P(p.x, p.y, zw)
-                    pygame.draw.ellipse(self.screen, (214, 238, 252),
-                                        (cx - r * 56, cy - r * 28, r * 112, r * 56), 2)
-                return
+                return                                   # les ronds sont dessinés par draw_row (sous les bûches)
         if row is not None:
             r_ = max(0.18, 0.33 - p.lift * 0.005)
+            if self.skin_now().get("style") == "chicken":
+                r_ *= CHICKEN_SCALE                      # ombre proportionnelle au poulet
             gc = shade(ground_color(row), 0.78)
             self.top_poly(p.x - r_, p.x + r_, p.y - r_, p.y + r_, gz, gc)
         sq, wd = self.hop_squash()
@@ -403,9 +525,9 @@ class RenderMixin:
                 for c in row.pads:
                     items.append((c, "pad", c))
             else:
-                for c, ln in row.logs:
+                for idx, (c, ln) in enumerate(row.logs):
                     for xv in self.copies(row.shift + c, lo - 5, hi + 5):
-                        items.append((xv, "log", (xv, ln, c)))
+                        items.append((xv, "log", (xv, ln, c, idx)))
         elif k == "rail":
             self.slab(xa, xb, y0, y1, zt, RAIL_C)
             self.draw_borders(row, xa, xb, zt, RAIL_C)
@@ -418,17 +540,34 @@ class RenderMixin:
             if row.state == "pass":
                 for i in range(8):
                     items.append((row.front - row.dir * (1 + 2 * i), "train", (i, row.front - row.dir * (1 + 2 * i))))
-        if with_player:
+        under = None                                   # véhicule / train qui a écrasé le joueur
+        if with_player and self.state == "dead":
+            if self.dead == "drown":
+                self.draw_drown_rings(ZT["river"] if k == "river" else ZT["pads"])   # avant tous les objets : sous les bûches
+            elif self.dead == "squash":
+                best = 9.0
+                for it in items:
+                    if it[1] == "veh":
+                        xv, half = it[2][0], it[2][1]["len"] / 2 + .5
+                    elif it[1] == "train":
+                        xv, half = it[2][1], .97 + .5
+                    else:
+                        continue
+                    dx = abs(self.p.x - xv)
+                    if dx <= half and dx < best:
+                        best, under = dx, it
+        if with_player and under is None:
             kx = self.p.x
             if k == "river":                       # le joueur est dessiné APRÈS la bûche qui le porte
                 for it in items:
                     if it[1] == "log":
-                        xv, ln, _ = it[2]
+                        xv, ln = it[2][0], it[2][1]
                         if xv - ln / 2 - .15 <= self.p.x <= xv + ln / 2 + .15:
                             kx = max(kx, xv + 1e-3)
             items.append((kx, "player", None))
         items.sort(key=lambda it: it[0])
-        for xk, kind, data in items:
+        for item in items:
+            xk, kind, data = item
             if kind == "tree":
                 c, (layers, tint) = data
                 self.top_poly(c - .38, c + .75, y - .4, y + .4, zt, shade(GRASS_C[y % 2], 0.8))
@@ -441,16 +580,19 @@ class RenderMixin:
                 cx, cy = self.P(data, y, zt + 20 + math.sin(t * 3 + data) * 3)
                 draw_coin(self.screen, cx, cy, t)
             elif kind == "veh":
-                ln_ = 1.7 if data[1]["truck"] else 0.85
+                ln_ = 1.7 if data[1]["truck"] else (0.62 if data[1].get("small") else 0.85)
                 self.top_poly(data[0] - ln_, data[0] + ln_ + .3, y - .42, y + .42, zt, shade(ROAD_C[y % 2], 0.7))
+                if item is under:
+                    self.draw_player()                 # écrasé : le joueur est SOUS le véhicule (entre l'ombre et la carrosserie)
+                    self._skip |= self.draw_particles(lambda q: abs(q[1] - y) < .8)      # ... et son éclatement aussi
                 self.draw_vehicle(data[0], y, row.dir, data[1], zt)
             elif kind == "log":
-                xv, ln, c = data
+                xv, ln, c, idx = data
                 self.top_poly(xv - ln / 2, xv + ln / 2 + .25, y - .4, y + .4, zt, shade(WATER_C[y % 2], 0.8))
-                self.draw_log(xv, ln, y, math.sin(t * 2 + c) * 1.2)
+                self.draw_log(xv, ln, y, self.log_bob(row, idx))
             elif kind == "pad":
                 c = data
-                self.cube(c - .4, c + .4, y - .4, y + .4, zt - 1, zt + 2, PAD_C)
+                self.draw_pad(c, y, zt, (c * 7 + row.seed * 3 + y * 5) % 4)
                 if (c * 5 + row.seed) % 4 == 0:
                     self.cube(c - .1, c + .1, y - .1, y + .1, zt + 2, zt + 7, (255, 150, 190))
             elif kind == "pole":
@@ -462,6 +604,9 @@ class RenderMixin:
                 self.face_b(xk + .02, xk + .12, y - .46, zt + 44, zt + 52, (255, 70, 70) if on2 else (96, 34, 34))
             elif kind == "train":
                 i, c = data
+                if item is under:
+                    self.draw_player()                 # écrasé par le train : dessiné avant lui
+                    self._skip |= self.draw_particles(lambda q: abs(q[1] - y) < .8)
                 col = (206, 52, 52) if i == 0 else [(72, 112, 192), (232, 192, 62), (92, 162, 112)][i % 3]
                 self.cube(c - .97, c + .97, y - .42, y + .42, zt + 2, zt + 36, col)
                 self.face_b(c - .8, c + .8, y - .42, zt + 20, zt + 30, WINDOW)
@@ -489,8 +634,21 @@ class RenderMixin:
             self.screen.blit(out, (x + ox, y + oy))
         self.screen.blit(img, (x, y))
 
+    def draw_particles(self, pred=None, skip=None):
+        """Dessine les particules (filtrables) ; renvoie les identifiants dessinés."""
+        drawn = set()
+        for q in self.parts:
+            if (pred and not pred(q)) or (skip and id(q) in skip):
+                continue
+            sx, sy = self.P(q[0], q[1], q[2])
+            r = max(1, int(5 * (1 - q[6] / q[7]) + 1))
+            pygame.draw.rect(self.screen, q[8], (sx - r, sy - r, 2 * r, 2 * r))
+            drawn.add(id(q))
+        return drawn
+
     def draw(self):
         s = self.screen
+        self._skip = set()
         s.fill((104, 176, 74))
         w, p = self.world, self.p
         prow = round(p.y)
@@ -523,10 +681,7 @@ class RenderMixin:
             self.screen = real
             ghost.set_alpha(135)
             real.blit(ghost, (0, 0))
-        for q in self.parts:
-            sx, sy = self.P(q[0], q[1], q[2])
-            r = max(1, int(5 * (1 - q[6] / q[7]) + 1))
-            pygame.draw.rect(s, q[8], (sx - r, sy - r, 2 * r, 2 * r))
+        self.draw_particles(skip=self._skip)             # particules restantes (celles sous un véhicule sont déjà dessinées)
         self.draw_hud()
 
     def occluded(self):
@@ -555,14 +710,15 @@ class RenderMixin:
             ov = pygame.Surface((W, H), pygame.SRCALPHA)
             ov.fill((0, 0, 0, 90))
             s.blit(ov, (0, 0))
-            self.text("FROGGY ROAD", self.f_big, (W // 2, 170), (255, 240, 120))
+            self.text("CROSSY ROAD", self.f_big, (W // 2, 170), (255, 240, 120))
             self.text("Traverse sans te faire écraser !", self.f_mid, (W // 2, 244))
             sk = SKINS[self.skin_i]
             lock = "" if sk["name"] in self.owned else "  -  verrouillé : %d pièces" % sk["price"]
-            self.text("C : personnage  >  %s%s" % (sk["name"], lock), self.f_small, (W // 2, 590),
+            self.text("C : personnage  >  %s%s" % (sk["name"], lock), self.f_small, (W // 2, 540),
                       (255, 220, 80) if not lock else (255, 140, 140))
-            self.text("ESPACE ou flèches pour commencer", self.f_mid, (W // 2, 640))
-            self.text("Flèches / ZQSD / WASD  -  P pause  -  R rejouer", self.f_small, (W // 2, 690))
+            self.text("ESPACE ou flèches ", self.f_mid, (W // 2, 590))
+            self.text("pour commencer !", self.f_mid, (W // 2, 630))
+            self.text("Flèches / ZQSD / WASD  -  P pause  -  R rejouer", self.f_small, (W // 2, 680))
         elif self.state == "dead" and self.dead_t > (1.3 if self.dead == "eagle" else 0.8):
             ov = pygame.Surface((W, H), pygame.SRCALPHA)
             ov.fill((0, 0, 0, 120))
